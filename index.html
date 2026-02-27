@@ -1,46 +1,193 @@
 
-   ```html
-   <!DOCTYPE html>
-   <html lang="zh">
-   <head>
-       <meta charset="UTF-8">
-       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-       <title>基金实时估值</title>
-       <style>
-           body {
-               font-family: Arial, sans-serif;
-               margin: 20px;
-           }
-           table {
-               width: 100%;
-               border-collapse: collapse;
-           }
-           th, td {
-               border: 1px solid #ccc;
-               padding: 8px;
-               text-align: left;
-           }
-           th {
-               background-color: #f2f2f2;
-           }
-       </style>
-   </head>
-   <body>
-       <h1>基金实时估值</h1>
-       <table>
-           <tr>
-               <th>基金名称</th>
-               <th>实时估值涨跌</th>
-           </tr>
-           <tr>
-               <td>基金A</td>
-               <td>+2.5%</td>
-           </tr>
-           <tr>
-               <td>基金B</td>
-               <td>-1.3%</td>
-           </tr>
-           <!-- 可以继续添加基金数据 -->
-       </table>
-   </body>
-   </html>
+```html
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>基金自选汇总（估值）</title>
+  <style>
+    :root { --up:#d60000; --down:#0a8a0a; --muted:#666; --bg:#fafafa; }
+    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+           margin: 16px; background: var(--bg); }
+    h1 { font-size: 18px; margin: 0 0 10px; }
+    .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom: 10px; }
+    button { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer; }
+    button:active { transform: translateY(1px); }
+    .hint { color: var(--muted); font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; }
+    th, td { padding: 10px 10px; border-bottom: 1px solid #eee; font-size: 14px; text-align: left; }
+    th { background: #f4f6f8; font-weight: 600; }
+    tr:hover td { background: #fcfcff; }
+    .code { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .num { font-variant-numeric: tabular-nums; }
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    .right { text-align: right; }
+    .name a { color:#111; text-decoration: none; }
+    .name a:hover { text-decoration: underline; }
+    .small { font-size: 12px; color: var(--muted); }
+    .footer { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .tag { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#334155; margin-left:6px; }
+  </style>
+</head>
+<body>
+  <h1>基金自选汇总（盘中估值）</h1>
+
+  <div class="bar">
+    <button id="refreshBtn">手动刷新</button>
+    <button id="sortBtn">按涨跌幅排序</button>
+    <span class="hint" id="status">等待加载…</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>基金</th>
+        <th class="right">估值</th>
+        <th class="right">估值涨跌</th>
+        <th class="right">估值涨跌幅</th>
+        <th>估值时间</th>
+        <th>跳转</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <div class="footer">
+    数据源：天天基金盘中估值接口 fundgz.1234567.com.cn（返回 JS 包裹 JSON）。<br/>
+    说明：估值为参考值，非最终净值；若遇到接口不可用/跨域限制，可稍后重试。<br/>
+  </div>
+
+<script>
+  // 你的 8 只基金（可自行增减）
+  const funds = [
+    { code: "020692", name: "博时中证全指通信设备指数发起", tag: "通信设备" },
+    { code: "020989", name: "南方恒生科技ETF发起联接", tag: "港股科技" },
+    { code: "018490", name: "万家中证工业有色金属主题ETF发起式联接", tag: "有色金属" },
+    { code: "021856", name: "博时中证油气资源ETF发起式联接", tag: "油气" },
+    { code: "023521", name: "博时上证科创板人工智能ETF发起式联接", tag: "科创AI" },
+    { code: "025857", name: "华夏中证电网设备主题ETF发起式联接", tag: "电网设备" },
+    { code: "020640", name: "广发中证半导体材料设备ETF发起式联接", tag: "半导体" },
+    { code: "005963", name: "宝盈人工智能股票", tag: "主动AI" },
+  ];
+
+  const tbody = document.getElementById("tbody");
+  const statusEl = document.getElementById("status");
+  const refreshBtn = document.getElementById("refreshBtn");
+  const sortBtn = document.getElementById("sortBtn");
+
+  let lastData = [];
+  let sorted = false;
+
+  function fmtPct(v) {
+    const n = Number(v);
+    if (!isFinite(n)) return "-";
+    return (n > 0 ? "+" : "") + n.toFixed(2) + "%";
+  }
+  function clsByPct(v) {
+    const n = Number(v);
+    if (!isFinite(n) || n === 0) return "";
+    return n > 0 ? "up" : "down";
+  }
+
+  function eastmoneyDetailUrl(code){
+    return `https://fund.eastmoney.com/${code}.html`;
+  }
+
+  // 用 JSONP 方式拉取（避免 CORS）
+  function fetchGz(code){
+    return new Promise((resolve) => {
+      const cb = "cb_" + code + "_" + Date.now() + "_" + Math.floor(Math.random()*1e6);
+
+      window[cb] = (obj) => {
+        resolve({ ok: true, data: obj });
+        cleanup();
+      };
+
+      function cleanup(){
+        try { delete window[cb]; } catch(e) { window[cb] = undefined; }
+        if (script && script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      const script = document.createElement("script");
+      // 关键：用 ?callback=cb 做 JSONP
+      script.src = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}&callback=${cb}`;
+      script.onerror = () => { resolve({ ok: false, error: "network/script error" }); cleanup(); };
+      document.body.appendChild(script);
+
+      // 超时兜底
+      setTimeout(() => { resolve({ ok: false, error: "timeout" }); cleanup(); }, 8000);
+    });
+  }
+
+  function render(rows){
+    tbody.innerHTML = rows.map(r => {
+      const pctCls = clsByPct(r.gszzl);
+      const gsz = r.gsz ?? "-";
+      const gszzl = r.gszzl ?? "-";
+      const gztime = r.gztime ?? "-";
+
+      return `
+        <tr>
+          <td class="name">
+            <div><a href="${eastmoneyDetailUrl(r.code)}" target="_blank" rel="noopener">${r.name}</a>
+              <span class="tag">${r.tag || ""}</span>
+            </div>
+            <div class="small code">${r.code}</div>
+          </td>
+          <td class="right num">${gsz}</td>
+          <td class="right num ${pctCls}">${(Number(gszzl)>0?"+":"")}${isFinite(Number(gszzl))?Number(gszzl).toFixed(4):gszzl}</td>
+          <td class="right num ${pctCls}">${fmtPct(r.gszzl)}</td>
+          <td class="num">${gztime}</td>
+          <td><a href="${eastmoneyDetailUrl(r.code)}" target="_blank" rel="noopener">详情</a></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function load(){
+    statusEl.textContent = "加载中…";
+    const t0 = Date.now();
+
+    const results = await Promise.all(funds.map(async f => {
+      const res = await fetchGz(f.code);
+
+      if (res.ok && res.data) {
+        // res.data 类似：{"fundcode":"xxxx","name":"xxx","gsz":"1.234","gszzl":"-0.56","gztime":"2026-02-27 14:32"}
+        return { ...f, ...res.data, code: f.code };
+      } else {
+        return { ...f, gsz: "-", gszzl: NaN, gztime: "-", error: res.error || "error" };
+      }
+    }));
+
+    lastData = results;
+    render(results);
+
+    const okCount = results.filter(x => isFinite(Number(x.gszzl))).length;
+    statusEl.textContent = `已加载 ${okCount}/${results.length} 只，用时 ${(Date.now()-t0)}ms（${new Date().toLocaleString()}）`;
+  }
+
+  function sortByPct(){
+    if (!lastData.length) return;
+    sorted = !sorted;
+    const rows = [...lastData].sort((a,b)=>{
+      const va = Number(a.gszzl), vb = Number(b.gszzl);
+      if (!isFinite(va) && !isFinite(vb)) return 0;
+      if (!isFinite(va)) return 1;
+      if (!isFinite(vb)) return -1;
+      return sorted ? (vb - va) : (va - vb);
+    });
+    render(rows);
+    statusEl.textContent = sorted ? "已按涨跌幅：从高到低" : "已按涨跌幅：从低到高";
+  }
+
+  refreshBtn.addEventListener("click", load);
+  sortBtn.addEventListener("click", sortByPct);
+
+  // 自动加载 + 每60秒刷新一次
+  load();
+  setInterval(load, 60000);
+</script>
+</body>
+</html>
